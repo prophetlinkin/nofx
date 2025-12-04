@@ -350,6 +350,38 @@ func calculateATR(klines []Kline, period int) float64 {
 	return atr
 }
 
+// SuggestSLTPFromATR 根据 market.Data（优先使用 longer-term ATR）给出建议止损/止盈价格（名义上的辅助函数）
+// 返回 (stopLossPrice, takeProfitPrice, stopLossPct, takeProfitPct)
+func SuggestSLTPFromATR(md *Data, side string, atrMultiplier, rr float64) (float64, float64, float64, float64) {
+	if md == nil {
+		return 0, 0, 0, 0
+	}
+	price := md.CurrentPrice
+	// 优先使用 longer term ATR14 -> 否则使用 intraday ATR
+	atr := 0.0
+	if md.LongerTermContext != nil && md.LongerTermContext.ATR14 > 0 {
+		atr = md.LongerTermContext.ATR14
+	} else if md.IntradaySeries != nil && md.IntradaySeries.ATR14 > 0 {
+		atr = md.IntradaySeries.ATR14
+	}
+	if atr <= 0 {
+		return 0, 0, 0, 0
+	}
+
+	slDist := atr * atrMultiplier
+	tpDist := slDist * rr
+
+	if strings.ToLower(side) == "long" {
+		stop := price - slDist
+		take := price + tpDist
+		return stop, take, slDist / price, tpDist / price
+	}
+	// short
+	stop := price + slDist
+	take := price - tpDist
+	return stop, take, slDist / price, tpDist / price
+}
+
 // calculateIntradaySeries 计算日内系列数据
 func calculateIntradaySeries(klines []Kline) *IntradayData {
 	data := &IntradayData{

@@ -251,3 +251,6 @@ type USMarketStatus struct {
 	SPXChange1h float64 // S&P 500 過去 1 小時變化百分比
 	Warning     string  // 警告訊息（如大跌 >2%）
 }
+
+// NOTE: Context, MartingaleConfig and MartingaleState were removed from the market package to avoid circular dependency.
+// Place those types into the decision package (decision/engine.go) where AccountInfo, PositionInfo and OpenOrderInfo are defined.
