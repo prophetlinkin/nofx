@@ -24,6 +24,12 @@ type Data struct {
 
 	// ⚡ 新增：宏觀市場情緒（免費來源：Yahoo Finance API、Alpha Vantage）
 	MarketSentiment *MarketSentiment // VIX 恐慌指數、美股狀態等
+
+	// ⚡ Jane Street新增
+	SignalQuality     *SignalQuality     `json:"-"` // 信号质量评分
+	MarketRegime      *MarketRegime      `json:"-"` // 市场状态
+	ExtremeOI         *ExtremeOIPosition `json:"-"` // OI极端位置
+	VolatilityMetrics *VolatilityMetrics `json:"-"` // 波动率指标
 }
 
 // OIData Open Interest数据
@@ -228,26 +234,66 @@ var config = Config{
 	UpdateInterval: 60, // 1 minute
 }
 
-// ========== 新增：宏觀市場情緒數據結構 ==========
+// ========== Jane Street风格：信号质量与市场制度 ==========
 
-// MarketSentiment 市場情緒與風險指標（免費來源）
-type MarketSentiment struct {
-	// VIX 恐慌指數（來源：Yahoo Finance API - 免費）
-	VIX            float64 // 當前 VIX 值
-	FearLevel      string  // 恐慌等級："low"(<15), "moderate"(15-20), "high"(20-30), "extreme"(>30)
-	Recommendation string  // 建議："normal", "cautious", "defensive", "avoid_new_positions"
-
-	// 美股狀態（來源：Alpha Vantage API - 免費）
-	USMarket *USMarketStatus // 美股狀態（僅在交易時段有意義）
-
-	// 更新時間
-	UpdatedAt time.Time
+// SignalQuality 信号质量评分（0-100，75+才能交易）
+type SignalQuality struct {
+	TrendConfidence   float64 `json:"trend_confidence"`   // 趋势一致性（EMA、价格、成交量）
+	MomentumStrength  float64 `json:"momentum_strength"`  // 动量强度（MACD、RSI）
+	VolumeConfirm     float64 `json:"volume_confirm"`     // 成交量确认度
+	OIAlignment       float64 `json:"oi_alignment"`       // OI与价格对齐度
+	FundingRateSignal float64 `json:"funding_rate_signal"` // 资金费率反向信号
+	OverallScore      float64 `json:"overall_score"`      // 综合评分
+	Verdict           string  `json:"verdict"`            // "STRONG_BUY", "BUY", "NEUTRAL", "SELL", "STRONG_SELL", "AVOID"
 }
 
-// USMarketStatus 美股市場狀態
-type USMarketStatus struct {
-	IsOpen      bool    // 是否在交易時段（美東時間 9:30-16:00）
-	SPXTrend    string  // S&P 500 趨勢："up", "down", "neutral"（基於 1 小時變化）
-	SPXChange1h float64 // S&P 500 過去 1 小時變化百分比
-	Warning     string  // 警告訊息（如大跌 >2%）
+// MarketRegime 市场状态识别
+type MarketRegime struct {
+	State              string  `json:"state"`               // "TRENDING_UP", "TRENDING_DOWN", "RANGE_BOUND", "VOLATILE", "CAPITULATION", "EUPHORIA"
+	Confidence         float64 `json:"confidence"`         // 状态确定度
+	VolatilityLevel    string  `json:"volatility_level"`   // "LOW", "MEDIUM", "HIGH", "EXTREME"
+	TrendStrength      float64 `json:"trend_strength"`     // 0-1，趋势强度
+	SupportResistance  [2]float64 `json:"support_resistance"` // [support, resistance]
+	RecommendedLeverage int    `json:"recommended_leverage"` // 动态杠杆建议
+}
+
+// ExtremeOIPosition OI极端位置检测
+type ExtremeOIPosition struct {
+	IsExtreme        bool    `json:"is_extreme"`        // 是否处于极端位置
+	Type             string  `json:"type"`              // "TOP_EXTREME" (多头拥挤) / "BOTTOM_EXTREME" (空头拥挤) / "NEUTRAL"
+	OIPercentile     float64 `json:"oi_percentile"`     // OI在历史中的百分位数
+	ReverseSignal    bool    `json:"reverse_signal"`    // 是否应该反向交易
+	ReverseStrength  float64 `json:"reverse_strength"`  // 反向信号强度（0-1）
+}
+
+// VolatilityMetrics 波动率指标
+type VolatilityMetrics struct {
+	ATR14             float64 `json:"atr_14"`           // Average True Range (14周期)
+	ATR20             float64 `json:"atr_20"`           // Average True Range (20周期)
+	HistoricalVol20   float64 `json:"historical_vol_20"` // 20周期历史波动率
+	HistoricalVol60   float64 `json:"historical_vol_60"` // 60周期历史波动率
+	BollingerWidth    float64 `json:"bollinger_width"`   // Bollinger Band宽度
+	BollingerPosition float64 `json:"bollinger_position"` // 价格在BB中的位置 (0-1)
+}
+
+// TradingStats 交易统计（用于Sharpe调整）
+type TradingStats struct {
+	RecentWinRate     float64 `json:"recent_win_rate"`    // 最近20笔交易的胜率
+	RecentAvgRR       float64 `json:"recent_avg_rr"`      // 最近20笔的平均风险回报比
+	TradeFrequency1h  int     `json:"trade_frequency_1h"` // 过去1小时的交易次数
+	TradeFrequency24h int     `json:"trade_frequency_24h"` // 过去24小时的交易次数
+	MaxDrawdown       float64 `json:"max_drawdown"`       // 最大回撤
+	SharpeRatio       float64 `json:"sharpe_ratio"`       // 当前Sharpe比率
+	CumulativePnL     float64 `json:"cumulative_pnl"`     // 累计盈亏
+}
+
+// MarketSentiment 全局市场情绪（来自VIX、美股等）
+type MarketSentiment struct {
+	VIX              float64 `json:"vix"`               // 恐慌指数
+	SPX              float64 `json:"spx"`               // 标普500指数
+	SPXChange4h      float64 `json:"spx_change_4h"`    // 4小时变化
+	USEquityTrend    string  `json:"us_equity_trend"`  // "BULLISH", "BEARISH", "NEUTRAL"
+	CryptoSentiment  string  `json:"crypto_sentiment"` // "EUPHORIA", "BULLISH", "NEUTRAL", "BEARISH", "CAPITULATION"
+	RiskOnOff        string  `json:"risk_on_off"`      // "RISK_ON", "RISK_OFF"
+	FederalRateEnv   string  `json:"federal_rate_env"` // "LOOSE", "NEUTRAL", "TIGHT"
 }

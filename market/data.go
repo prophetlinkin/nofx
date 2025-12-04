@@ -1040,3 +1040,380 @@ func isStaleData(klines []Kline, symbol string) bool {
 	log.Printf("⚠️  %s detected extreme price stability (no fluctuation for %d consecutive periods), but volume is normal", symbol, stalePriceThreshold)
 	return false
 }
+
+// ========== Jane Street风格：信号质量与市场制度分析 ==========
+
+// CalculateSignalQuality 计算信号质量评分（严格的多维度验证）
+func CalculateSignalQuality(data *Data, direction string) *SignalQuality {
+    sq := &SignalQuality{}
+
+    // 方向："LONG" 或 "SHORT"
+    isLong := direction == "LONG"
+
+    // 1️⃣ 趋势一致性 (Trend Confluence) - 权重30%
+    // EMA20 > EMA50 且收盘价 > EMA20 → 做多信号
+    trendScore := 0.0
+    if data.LongerTermContext != nil {
+        ema20 := data.CurrentEMA20
+        ema50 := data.LongerTermContext.EMA50
+        price := data.CurrentPrice
+
+        if isLong {
+            // 做多：需要 price > EMA20 > EMA50
+            if price > ema20 && ema20 > ema50 {
+                trendScore = 85.0
+            } else if price > ema20 {
+                trendScore = 60.0
+            } else if price > ema50 {
+                trendScore = 40.0
+            } else {
+                trendScore = 0.0
+            }
+        } else {
+            // 做空：需要 price < EMA20 < EMA50
+            if price < ema20 && ema20 < ema50 {
+                trendScore = 85.0
+            } else if price < ema20 {
+                trendScore = 60.0
+            } else if price < ema50 {
+                trendScore = 40.0
+            } else {
+                trendScore = 0.0
+            }
+        }
+    }
+    sq.TrendConfidence = trendScore
+
+    // 2️⃣ 动量强度 (Momentum) - 权重25%
+    // MACD > 0 且RSI 30-70 之间 → 有效信号
+    momentumScore := 0.0
+    rsi := data.CurrentRSI7
+    macd := data.CurrentMACD
+
+    if isLong {
+        // 做多：MACD > 0 且 RSI 30-70（不超买）
+        if macd > 0 && rsi >= 30 && rsi <= 70 {
+            momentumScore = 75.0 + (rsi-30)/40*10 // 最高85
+        } else if macd > 0 && rsi > 70 {
+            momentumScore = 50.0 // RSI超买，减分
+        } else if macd > 0 {
+            momentumScore = 60.0
+        }
+    } else {
+        // 做空：MACD < 0 且 RSI 30-70（不超卖）
+        if macd < 0 && rsi >= 30 && rsi <= 70 {
+            momentumScore = 75.0 + (70-rsi)/40*10 // 最高85
+        } else if macd < 0 && rsi < 30 {
+            momentumScore = 50.0 // RSI超卖，减分
+        } else if macd < 0 {
+            momentumScore = 60.0
+        }
+    }
+    sq.MomentumStrength = momentumScore
+
+    // 3️⃣ 成交量确认 (Volume Confirmation) - 权重20%
+    // 价格上升时成交量上升 → 有效确认
+    volumeScore := 0.0
+    if data.IntradaySeries != nil && len(data.IntradaySeries.Volume) >= 2 {
+        vol := data.IntradaySeries.Volume
+        avgVol := 0.0
+        for _, v := range vol[:len(vol)-1] {
+            avgVol += v
+        }
+        avgVol /= float64(len(vol) - 1)
+
+        currentVol := vol[len(vol)-1]
+        volRatio := currentVol / avgVol
+
+        if isLong && data.PriceChange1h > 0 && volRatio > 1.0 {
+            volumeScore = 80.0 + math.Min(volRatio-1.0, 0.2)*100 // 上限100
+        } else if isLong && data.PriceChange1h > 0 {
+            volumeScore = 60.0
+        } else if !isLong && data.PriceChange1h < 0 && volRatio > 1.0 {
+            volumeScore = 80.0 + math.Min(volRatio-1.0, 0.2)*100
+        } else if !isLong && data.PriceChange1h < 0 {
+            volumeScore = 60.0
+        } else {
+            volumeScore = 30.0
+        }
+    }
+    sq.VolumeConfirm = volumeScore
+
+    // 4️⃣ OI对齐度 (OI Alignment) - 权重15%
+    // OI增长且价格上升 → 强信号；OI下降且价格上升 → 弱信号
+    oiScore := 0.0
+    if data.OpenInterest != nil {
+        oiChange := data.OpenInterest.Change4h // 4小时变化率
+
+        if isLong && data.PriceChange4h > 0 && oiChange > 0.03 { // OI增长>3%
+            oiScore = 85.0
+        } else if isLong && data.PriceChange4h > 0 && oiChange > 0 {
+            oiScore = 70.0
+        } else if isLong && data.PriceChange4h > 0 && oiChange < 0 {
+            oiScore = 40.0 // 价格涨但OI减少 → 弱信号
+        } else if !isLong && data.PriceChange4h < 0 && oiChange > 0.03 {
+            oiScore = 85.0
+        } else if !isLong && data.PriceChange4h < 0 && oiChange > 0 {
+            oiScore = 70.0
+        } else if !isLong && data.PriceChange4h < 0 && oiChange < 0 {
+            oiScore = 40.0
+        } else {
+            oiScore = 30.0
+        }
+    }
+    sq.OIAlignment = oiScore
+
+    // 5️⃣ 资金费率反向信号 (Funding Rate Reversal) - 权重10%
+    // 费率过高时做空 / 费率过低时做多 → 高收益
+    fundingScore := 0.0
+    fr := data.FundingRate
+
+    if isLong && fr < 0.0001 { // 费率低 → 做多机会
+        fundingScore = 80.0
+    } else if isLong && fr < 0.0005 {
+        fundingScore = 60.0
+    } else if isLong && fr > 0.001 { // 费率太高 → 有风险
+        fundingScore = 20.0
+    } else if !isLong && fr > 0.001 { // 费率高 → 做空机会
+        fundingScore = 80.0
+    } else if !isLong && fr > 0.0005 {
+        fundingScore = 60.0
+    } else if !isLong && fr < 0.0001 { // 费率太低 → 有风险
+        fundingScore = 20.0
+    } else {
+        fundingScore = 50.0
+    }
+    sq.FundingRateSignal = fundingScore
+
+    // 综合评分（加权平均）
+    sq.OverallScore = (sq.TrendConfidence*0.30 +
+        sq.MomentumStrength*0.25 +
+        sq.VolumeConfirm*0.20 +
+        sq.OIAlignment*0.15 +
+        sq.FundingRateSignal*0.10)
+
+    // 判决：只有分数≥75才能交易
+    switch {
+    case sq.OverallScore >= 85:
+        sq.Verdict = "STRONG_BUY"
+        if !isLong {
+            sq.Verdict = "STRONG_SELL"
+        }
+    case sq.OverallScore >= 75:
+        sq.Verdict = "BUY"
+        if !isLong {
+            sq.Verdict = "SELL"
+        }
+    case sq.OverallScore >= 60:
+        sq.Verdict = "NEUTRAL"
+    case sq.OverallScore >= 50:
+        sq.Verdict = "AVOID"
+    default:
+        sq.Verdict = "AVOID"
+    }
+
+    return sq
+}
+
+// DetectMarketRegime 检测市场状态（改变策略参数的关键）
+func DetectMarketRegime(data *Data) *MarketRegime {
+    regime := &MarketRegime{}
+
+    if data.LongerTermContext == nil || data.DailyContext == nil {
+        regime.State = "UNKNOWN"
+        regime.Confidence = 0.0
+        return regime
+    }
+
+    // 计算短期和长期趋势
+    shortTrendPcts := []float64{}
+    if data.MidTermSeries1h != nil && len(data.MidTermSeries1h.MidPrices) >= 2 {
+        for i := 1; i < len(data.MidTermSeries1h.MidPrices); i++ {
+            pct := (data.MidTermSeries1h.MidPrices[i] - data.MidTermSeries1h.MidPrices[i-1]) / data.MidTermSeries1h.MidPrices[i-1]
+            shortTrendPcts = append(shortTrendPcts, pct)
+        }
+    }
+
+    longTrendPcts := []float64{}
+    if data.DailyContext != nil && len(data.DailyContext.MidPrices) >= 2 {
+        for i := 1; i < len(data.DailyContext.MidPrices); i++ {
+            pct := (data.DailyContext.MidPrices[i] - data.DailyContext.MidPrices[i-1]) / data.DailyContext.MidPrices[i-1]
+            longTrendPcts = append(longTrendPcts, pct)
+        }
+    }
+
+    avgShortTrend := calculateAvg(shortTrendPcts)
+    avgLongTrend := calculateAvg(longTrendPcts)
+    stdShort := calculateStd(shortTrendPcts)
+    stdLong := calculateStd(longTrendPcts)
+
+    // 状态判断
+    if avgLongTrend > 0.01 && avgShortTrend > 0 {
+        regime.State = "TRENDING_UP"
+        regime.TrendStrength = math.Min(avgShortTrend/0.02, 1.0)
+        regime.RecommendedLeverage = 5
+        regime.Confidence = 0.8
+    } else if avgLongTrend < -0.01 && avgShortTrend < 0 {
+        regime.State = "TRENDING_DOWN"
+        regime.TrendStrength = math.Min(-avgShortTrend/0.02, 1.0)
+        regime.RecommendedLeverage = 5
+        regime.Confidence = 0.8
+    } else if stdShort > 0.03 {
+        regime.State = "VOLATILE"
+        regime.RecommendedLeverage = 2
+        regime.Confidence = 0.7
+    } else if stdShort < 0.005 {
+        regime.State = "RANGE_BOUND"
+        regime.RecommendedLeverage = 1
+        regime.Confidence = 0.6
+    } else {
+        regime.State = "NEUTRAL"
+        regime.RecommendedLeverage = 3
+        regime.Confidence = 0.5
+    }
+
+    // 波动率等级
+    if stdShort > 0.04 {
+        regime.VolatilityLevel = "EXTREME"
+    } else if stdShort > 0.02 {
+        regime.VolatilityLevel = "HIGH"
+    } else if stdShort > 0.01 {
+        regime.VolatilityLevel = "MEDIUM"
+    } else {
+        regime.VolatilityLevel = "LOW"
+    }
+
+    return regime
+}
+
+// DetectExtremeOI 检测OI极端位置（反向交易信号）
+func DetectExtremeOI(symbol string, oiData *OIData, priceChange4h float64) *ExtremeOIPosition {
+    extreme := &ExtremeOIPosition{
+        IsExtreme: false,
+        Type:      "NEUTRAL",
+    }
+
+    if oiData == nil || len(oiData.Historical) == 0 {
+        return extreme
+    }
+
+    // 计算OI百分位数
+    values := make([]float64, len(oiData.Historical))
+    for i, snap := range oiData.Historical {
+        values[i] = snap.Value
+    }
+
+    percentile := calculatePercentile(values, oiData.Latest)
+    extreme.OIPercentile = percentile
+
+    // 极端位置定义
+    if percentile > 0.95 && priceChange4h > 0.05 {
+        // OI处于历史高位，价格大涨 → 多头拥挤 → 反向做空机会
+        extreme.IsExtreme = true
+        extreme.Type = "TOP_EXTREME"
+        extreme.ReverseSignal = true
+        extreme.ReverseStrength = math.Min((percentile-0.95)/0.05, 1.0) // 最高100%
+    } else if percentile < 0.05 && priceChange4h < -0.05 {
+        // OI处于历史低位，价格大跌 → 空头拥挤 → 反向做多机会
+        extreme.IsExtreme = true
+        extreme.Type = "BOTTOM_EXTREME"
+        extreme.ReverseSignal = true
+        extreme.ReverseStrength = math.Min((0.05-percentile)/0.05, 1.0)
+    }
+
+    return extreme
+}
+
+// CalculateVolatilityMetrics 计算波动率指标
+func CalculateVolatilityMetrics(data *Data) *VolatilityMetrics {
+    vm := &VolatilityMetrics{}
+
+    // ATR
+    if data.LongerTermContext != nil {
+        vm.ATR14 = data.LongerTermContext.ATR14
+        vm.ATR20 = data.LongerTermContext.ATR3 // 使用3小时ATR作为参考
+    }
+
+    // 历史波动率
+    if data.MidTermSeries1h != nil && len(data.MidTermSeries1h.MidPrices) >= 20 {
+        vm.HistoricalVol20 = calculateHistoricalVolatility(data.MidTermSeries1h.MidPrices, 20)
+    }
+    if data.DailyContext != nil && len(data.DailyContext.MidPrices) >= 60 {
+        vm.HistoricalVol60 = calculateHistoricalVolatility(data.DailyContext.MidPrices, 60)
+    }
+
+    // Bollinger Bands
+    if data.MidTermSeries1h != nil && len(data.MidTermSeries1h.MidPrices) >= 20 {
+        prices := data.MidTermSeries1h.MidPrices
+        sma := calculateSMA(prices, 20)
+        std := calculateStd(prices)
+        upper := sma + 2*std
+        lower := sma - 2*std
+        vm.BollingerWidth = (upper - lower) / sma
+        vm.BollingerPosition = (data.CurrentPrice - lower) / (upper - lower)
+    }
+
+    return vm
+}
+
+// 辅助函数
+func calculateAvg(values []float64) float64 {
+    if len(values) == 0 {
+        return 0.0
+    }
+    sum := 0.0
+    for _, v := range values {
+        sum += v
+    }
+    return sum / float64(len(values))
+}
+
+func calculateStd(values []float64) float64 {
+    if len(values) == 0 {
+        return 0.0
+    }
+    avg := calculateAvg(values)
+    sumSq := 0.0
+    for _, v := range values {
+        sumSq += (v - avg) * (v - avg)
+    }
+    return math.Sqrt(sumSq / float64(len(values)))
+}
+
+func calculatePercentile(values []float64, target float64) float64 {
+    if len(values) == 0 {
+        return 0.5
+    }
+    count := 0
+    for _, v := range values {
+        if v <= target {
+            count++
+        }
+    }
+    return float64(count) / float64(len(values))
+}
+
+func calculateHistoricalVolatility(prices []float64, period int) float64 {
+    if len(prices) < period {
+        return 0.0
+    }
+    returns := make([]float64, len(prices)-1)
+    for i := 1; i < len(prices); i++ {
+        returns[i-1] = math.Log(prices[i] / prices[i-1])
+    }
+    if len(returns) > period {
+        returns = returns[len(returns)-period:]
+    }
+    return calculateStd(returns)
+}
+
+func calculateSMA(prices []float64, period int) float64 {
+    if len(prices) < period {
+        return 0.0
+    }
+    sum := 0.0
+    for i := len(prices) - period; i < len(prices); i++ {
+        sum += prices[i]
+    }
+    return sum / float64(period)
+}
