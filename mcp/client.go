@@ -70,7 +70,7 @@ func (client *Client) SetAPIKey(apiKey, apiURL, customModel string) {
 	}
 
 	client.Model = customModel
-	client.Timeout = 120 * time.Second
+	client.Timeout = 180 * time.Second
 }
 
 // CallWithMessages 使用 system + user prompt 调用AI API（推荐）
