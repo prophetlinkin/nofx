@@ -289,14 +289,31 @@ type TradingStats struct {
 
 // MarketSentiment 全局市场情绪（来自VIX、美股等）
 type MarketSentiment struct {
-	// VIX 恐慌指數（來源：Yahoo Finance API - 免費）
-	VIX            float64 // 當前 VIX 值
-	FearLevel      string  // 恐慌等級："low"(<15), "moderate"(15-20), "high"(20-30), "extreme"(>30)
-	Recommendation string  // 建議："normal", "cautious", "defensive", "avoid_new_positions"
+	VIX            float64 `json:"vix"`             // 恐慌指数
+	FearLevel      string  `json:"fear_level"`      // "low"/"moderate"/"high"/"extreme"
+	Recommendation string  `json:"recommendation"`  // "normal"/"cautious"/"defensive"/"avoid_new_positions"
 
-	// 美股狀態（來源：Alpha Vantage API - 免費）
-	USMarket *USMarketStatus // 美股狀態（僅在交易時段有意義）
+	// 以下字段在 decision/engine.go 与示例中被引用，添加以保持兼容
+	USEquityTrend  string  `json:"us_equity_trend"`  // "BULLISH"/"BEARISH"/"NEUTRAL"
+	CryptoSentiment string `json:"crypto_sentiment"` // "BULLISH"/"BEARISH"/"NEUTRAL"
+	RiskOnOff      string  `json:"risk_on_off"`      // "RISK_ON"/"RISK_OFF"
 
-	// 更新時間
-	UpdatedAt time.Time
+	USMarket *USMarketStatus `json:"us_market,omitempty"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+// USMarketStatus 描述美股市场的简要状态（被 sentiment.go 使用）
+type USMarketStatus struct {
+	Index          string    `json:"index"`           // e.g. "SPX"
+	Price          float64   `json:"price"`           // 当前价格
+	ChangePct4h    float64   `json:"change_pct_4h"`   // 4 小时变化（小数）
+	Trend          string    `json:"trend"`           // "BULLISH" / "BEARISH" / "NEUTRAL"
+	LastUpdated    time.Time `json:"last_updated"`    // 更新时间
+	Recommendation string    `json:"recommendation"`  // "normal" / "cautious" / "defensive"
+
+	// Fields required by sentiment.go / sentiment_example.go
+	IsOpen        bool    `json:"is_open"`         // 美股是否在交易时段
+	SPXTrend      string  `json:"spx_trend"`       // 简化字段名（used in examples）
+	SPXChange1h   float64 `json:"spx_change_1h"`   // 1小时变化百分比（小数）
+	Warning       string  `json:"warning"`         // 任意提示/警告信息
 }

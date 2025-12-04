@@ -1246,6 +1246,8 @@ func DetectMarketRegime(data *Data) *MarketRegime {
     avgLongTrend := calculateAvg(longTrendPcts)
     stdShort := calculateStd(shortTrendPcts)
     stdLong := calculateStd(longTrendPcts)
+    // ensure stdLong is referenced to avoid "declared and not used" compile error
+    _ = stdLong
 
     // 状态判断
     if avgLongTrend > 0.01 && avgShortTrend > 0 {

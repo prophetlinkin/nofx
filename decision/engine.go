@@ -3,17 +3,15 @@ package decision
 import (
 	"encoding/json"
 	"fmt"
-	"log"
-	"math"
-	"nofx/logger"
-	"nofx/market"
-	"nofx/mcp"
-	"nofx/pool"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"log"
+
+	"nofx/market"
+	"nofx/mcp"
 )
 
 // 预编译正则表达式（性能优化：避免每次调用时重新编译）
@@ -841,6 +839,33 @@ func findMatchingBracket(s string, start int) int {
 
 	return -1
 }
+
+// OITopPosition is a minimal shape used by engine.go when iterating OI top positions.
+// Keep fields matching usage sites in this file.
+type OITopPosition struct {
+    Symbol           string
+    Rank             int
+    OIDeltaPercent   float64
+    OIDeltaValue     float64
+    PriceDeltaPercent float64
+    NetLong          float64
+    NetShort         float64
+}
+
+// OIPool is a small stub that returns typed OI top positions for compilation.
+// Replace with real implementation that fetches and returns actual data.
+type OIPool struct {
+    inner sync.Pool
+}
+
+// GetOITopPositions returns a typed slice and an error to match callsites.
+func (p *OIPool) GetOITopPositions(_ ...interface{}) ([]OITopPosition, error) {
+    // placeholder: return empty slice and nil error to satisfy callers
+    return []OITopPosition{}, nil
+}
+
+// package-level pool used across the file
+var pool = &OIPool{}
 
 // positionSizeConfig 定义账户规模分层配置
 type positionSizeConfig struct {
