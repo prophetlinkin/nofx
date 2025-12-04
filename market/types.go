@@ -289,11 +289,14 @@ type TradingStats struct {
 
 // MarketSentiment 全局市场情绪（来自VIX、美股等）
 type MarketSentiment struct {
-	VIX              float64 `json:"vix"`               // 恐慌指数
-	SPX              float64 `json:"spx"`               // 标普500指数
-	SPXChange4h      float64 `json:"spx_change_4h"`    // 4小时变化
-	USEquityTrend    string  `json:"us_equity_trend"`  // "BULLISH", "BEARISH", "NEUTRAL"
-	CryptoSentiment  string  `json:"crypto_sentiment"` // "EUPHORIA", "BULLISH", "NEUTRAL", "BEARISH", "CAPITULATION"
-	RiskOnOff        string  `json:"risk_on_off"`      // "RISK_ON", "RISK_OFF"
-	FederalRateEnv   string  `json:"federal_rate_env"` // "LOOSE", "NEUTRAL", "TIGHT"
+	// VIX 恐慌指數（來源：Yahoo Finance API - 免費）
+	VIX            float64 // 當前 VIX 值
+	FearLevel      string  // 恐慌等級："low"(<15), "moderate"(15-20), "high"(20-30), "extreme"(>30)
+	Recommendation string  // 建議："normal", "cautious", "defensive", "avoid_new_positions"
+
+	// 美股狀態（來源：Alpha Vantage API - 免費）
+	USMarket *USMarketStatus // 美股狀態（僅在交易時段有意義）
+
+	// 更新時間
+	UpdatedAt time.Time
 }
