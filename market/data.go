@@ -1417,6 +1417,3 @@ func calculateSMA(prices []float64, period int) float64 {
     }
     return sum / float64(period)
 }
-
-// ensure stdLong is referenced to avoid "declared and not used" compile error
-_ = stdLong
